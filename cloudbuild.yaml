@@ -1,0 +1,28 @@
+substitutions:
+  _IMAGE: us-central1-docker.pkg.dev/jclab-dev-dlk-services/dev-ctn-arg-comex-001/job-ingesta-api
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args: ["build", "-t", "${_IMAGE}:${SHORT_SHA}", "."]
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args: ["push", "${_IMAGE}:${SHORT_SHA}"]
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - deploy
+      - job-extract
+      - --project=jclab-dev-brz-tmp
+      - --region=us-central1
+      - --image=${_IMAGE}:${SHORT_SHA}
+      - --service-account=dev-seg-gsa-comex-ing-cpr@jclab-dev-brz-tmp.iam.gserviceaccount.com
+      - --set-secrets=API_CONFIG=api-config:latest
+      - --set-env-vars=BUCKET=dev-stg-gst-comex-001,TABLA_LOG=jclab-dev-brz-tmp.ext_comex.ctl_log_ingesta
+      - --max-retries=0
+      - --task-timeout=30m
+images: ["${_IMAGE}:${SHORT_SHA}"]
+options:
+  logging: CLOUD_LOGGING_ONLY

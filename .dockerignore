@@ -1,0 +1,13 @@
+.git
+.venv
+__pycache__
+.env
+venv
+env
+.env.example
+tests
+.pytest_cache
+.pre-commit-config.yaml
+.flake8
+pytest.ini
+README.md

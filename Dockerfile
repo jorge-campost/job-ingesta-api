@@ -1,0 +1,12 @@
+FROM python:3.15-slim
+
+ENV PYTHONUNBUFFERED=1
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copia el contenido de src/ (main.py, classes/, utils/, config/) a /app
+COPY src/ .
+
+CMD ["python", "main.py"]
