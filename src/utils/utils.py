@@ -9,10 +9,10 @@ TIPO: Módulo de utilidades
 OBSERVACION: En local las variables vienen del .env; en Cloud Run,
     API_CONFIG viene de Secret Manager y FECHA_DATOS la envía Airflow.
 SCHEDULER: No aplica
-VERSION: 1.2
+VERSION: 1.3
 DESARROLLADOR: Jorge
 PROVEEDOR: No aplica
-FECHA: 2026-11-03
+FECHA: 2026-11-04
 DESCRIPCION: Funciones de apoyo usadas por main.py y las clases.
 """
 
@@ -39,10 +39,26 @@ CAMPOS_POR_AUTH = {
 
 # seccion Funciones
 def configurarLogging() -> None:
-    """Configura el logging del job con nivel INFO."""
-    logging.basicConfig(
-        level=logging.INFO, format="%(levelname)s %(name)s %(message)s"
-    )
+    """Configura el logging del job con nivel INFO.
+
+    En Cloud Run (existe CLOUD_RUN_JOB, que Cloud Run define solo) usa
+    StructuredLogHandler de google-cloud-logging: cada log sale como
+    JSON con su severity (INFO, WARNING, ERROR), el archivo y la línea,
+    y los campos de extra={"json_fields": {...}}. En local escribe texto
+    legible en la consola.
+    """
+    if os.environ.get("CLOUD_RUN_JOB"):
+        from google.cloud.logging.handlers import StructuredLogHandler
+
+        manejador = StructuredLogHandler()
+        # Solo el texto: el nivel ya va en severity y el logger en labels
+        manejador.setFormatter(logging.Formatter("%(message)s"))
+    else:
+        manejador = logging.StreamHandler()
+        manejador.setFormatter(
+            logging.Formatter("%(levelname)s %(name)s %(message)s")
+        )
+    logging.basicConfig(level=logging.INFO, handlers=[manejador], force=True)
 
 
 def getConfig(nombreArchivo: str = "parameters.json") -> dict:

@@ -199,3 +199,23 @@ def testRegistraEventosEnLog():
     assert [f["estado"] for f in filas] == ["INICIADO", "OK"]
     assert filas[1]["ventana_desde"] == "2026-11-02T00:00:00"
     assert filas[1]["registros"] == 3
+
+
+def testNivelDeLogSegunEstado(caplog):
+    """OK se registra como INFO; FALLIDO como ERROR con sus campos."""
+    import logging
+
+    extractor = crearExtractor()
+    extractor.llamarApi = MagicMock(
+        side_effect=[requests.HTTPError("500"), CURRENCIES]
+    )
+    with caplog.at_level(logging.INFO), pytest.raises(RuntimeError):
+        extractor.ejecutar(FECHA)
+    finales = {
+        r.json_fields["endpoint"]: r.levelname
+        for r in caplog.records
+        if "páginas" in r.getMessage()
+    }
+    assert finales == {"rates": "ERROR", "currencies": "INFO"}
+    resumen = [r for r in caplog.records if "Resumen" in r.getMessage()]
+    assert resumen[0].levelname == "ERROR"

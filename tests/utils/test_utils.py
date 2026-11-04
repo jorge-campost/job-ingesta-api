@@ -2,12 +2,14 @@
 
 # seccion Imports
 import json
+import logging
 from datetime import datetime, timezone
 
 import pytest
 
 from utils.utils import (
     calcularVentana,
+    configurarLogging,
     generarEjecucion,
     getApiConfig,
     getConfig,
@@ -120,3 +122,33 @@ def testAuthTipoInvalido():
     """Un tipo de auth desconocido falla."""
     with pytest.raises(ValueError):
         getApiConfig("oauth")
+
+
+def testLogJsonEnCloudRun(monkeypatch, capsys):
+    """En Cloud Run cada log es JSON de StructuredLogHandler."""
+    monkeypatch.setenv("CLOUD_RUN_JOB", "job-extract")
+    configurarLogging()
+    log = logging.getLogger("prueba")
+    log.warning("sin tabla", extra={"json_fields": {"endpoint": "rates"}})
+    try:
+        raise ValueError("boom")
+    except ValueError:
+        log.exception("falló")
+    entradas = [
+        json.loads(linea)
+        for linea in capsys.readouterr().err.strip().splitlines()
+    ]
+    aviso, error = [e for e in entradas if "message" in e][-2:]
+    assert aviso["severity"] == "WARNING"
+    assert aviso["message"] == "sin tabla"
+    assert aviso["endpoint"] == "rates"
+    assert error["severity"] == "ERROR"
+    assert "ValueError: boom" in error["message"]
+
+
+def testLogTextoEnLocal(monkeypatch, capsys):
+    """Sin CLOUD_RUN_JOB el log es texto legible."""
+    monkeypatch.delenv("CLOUD_RUN_JOB", raising=False)
+    configurarLogging()
+    logging.getLogger("prueba").info("hola")
+    assert capsys.readouterr().err.strip() == "INFO prueba hola"

@@ -90,6 +90,31 @@ Uno por endpoint y ejecución. Guarda fuente, endpoint, tipo, `fecha_datos`, ven
 
 Si `TABLA_LOG` está definida, el job inserta una fila por evento en `ctl_log_ingesta` (DDL en `sql/ddl_ctl_log_ingesta.sql`). Solo inserta, nunca actualiza. Si BigQuery falla, deja un warning y sigue: la fuente de verdad es el manifest. El service account del job necesita `roles/bigquery.dataEditor` sobre el dataset `ext_comex`.
 
+### Logs
+
+El job usa el `logging` estándar de Python (`log.info`, `log.warning`, `log.exception`). `configurarLogging()` elige el handler según dónde corre:
+
+| Dónde | Handler | Salida |
+| --- | --- | --- |
+| Cloud Run (existe `CLOUD_RUN_JOB`, que Cloud Run define solo) | `StructuredLogHandler` de `google-cloud-logging` | Una línea JSON por log con `severity`, `message`, archivo y línea, y los campos de `json_fields` |
+| Local | `StreamHandler` | Texto: `INFO classes.classes ...` |
+
+Un endpoint `OK` se registra como INFO; uno `FALLIDO` o `INCOMPLETO`, como ERROR, igual que el resumen final si algo falló. El traceback de un error queda dentro del mismo log. Para agregar campos filtrables a un log:
+
+```python
+log.info("Página guardada", extra={"json_fields": {"endpoint": "rates", "pagina": 3}})
+```
+
+Filtros útiles en **Logging** → **Logs Explorer**:
+
+```
+resource.type="cloud_run_job"
+resource.labels.job_name="job-extract"
+severity>=WARNING
+jsonPayload.endpoint="rates"
+jsonPayload.fecha_datos="2026-11-02"
+```
+
 ### Usar el job con otra API
 
 Lo que cambia de una API a otra está en `src/config/parameters.json` y en el secreto. El código no se toca.
@@ -149,7 +174,7 @@ cd C:\Users\jcamp\OneDrive\Documents\gcp\job-extract
 .\.venv\Scripts\Activate.ps1
 
 # Librerías del job (van a requirements.txt)
-pip install requests google-cloud-storage google-cloud-bigquery python-dotenv
+pip install requests google-cloud-storage google-cloud-bigquery google-cloud-logging python-dotenv
 # Herramientas de desarrollo (cada desarrollador las instala en su venv; no van a requirements.txt)
 pip install black flake8 pydocstyle pytest pre-commit sphinx sphinx_markdown_builder
 
@@ -158,12 +183,13 @@ gcloud auth application-default login
 python src\main.py
 ```
 
-`requirements.txt` lleva solo las librerías del job, con versión fija. Ya trae estas cuatro; si actualizas alguna, toma la versión de `pip freeze`:
+`requirements.txt` lleva solo las librerías del job, con versión fija. Ya trae estas cinco; si actualizas alguna, toma la versión de `pip freeze`:
 
 ```
 requests==<versión>
 google-cloud-storage==<versión>
 google-cloud-bigquery==<versión>
+google-cloud-logging==<versión>
 python-dotenv==<versión>
 ```
 

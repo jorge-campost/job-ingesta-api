@@ -13,10 +13,10 @@ TIPO: Módulo de clases
 OBSERVACION: Cada método hace una sola tarea. Un endpoint que falla no
     detiene a los demás; el job termina con error al final.
 SCHEDULER: Airflow 3, diario, FECHA_DATOS = día anterior (D-1)
-VERSION: 1.2
+VERSION: 1.3
 DESARROLLADOR: Jorge
 PROVEEDOR: Frankfurter (laboratorio)
-FECHA: 2026-11-03
+FECHA: 2026-11-04
 DESCRIPCION: Define ClassExtractApi (alias CEA en main.py) y
     ClassLogIngesta (alias CLI), que escribe en la tabla de control.
 """
@@ -577,6 +577,26 @@ class ClassExtractApi:
             "duracion_seg": manifest["duracion_seg"],
         }
 
+    def camposLog(self, manifest: dict) -> dict:
+        """Campos para filtrar los logs en Cloud Logging.
+
+        :param manifest: manifest de la ejecución
+        :type manifest: dict
+        :return: fuente, endpoint, tipo, fecha_datos, ejecucion y estado
+        :rtype: dict
+        """
+        return {
+            clave: manifest[clave]
+            for clave in (
+                "fuente",
+                "endpoint",
+                "tipo",
+                "fecha_datos",
+                "ejecucion",
+                "estado",
+            )
+        }
+
     def registrarEvento(self, manifest: dict, estado: str) -> None:
         """Registra un evento en la tabla de control, si está configurada.
 
@@ -640,7 +660,11 @@ class ClassExtractApi:
             manifest["error"] = f"{type(error).__name__}: {error}"[
                 :LARGO_MAXIMO_ERROR
             ]
-            log.exception("%s: falló la extracción", nombreEndpoint)
+            log.exception(
+                "%s: falló la extracción",
+                nombreEndpoint,
+                extra={"json_fields": self.camposLog(manifest)},
+            )
         finally:
             fin = ahoraUtc()
             manifest["fin_utc"] = formatearUtc(fin)
@@ -648,7 +672,11 @@ class ClassExtractApi:
             nombreManifest = self.parametros["paths"]["nombreManifest"]
             self.guardarCrudo(manifest, prefijo + nombreManifest)
             self.registrarEvento(manifest, manifest["estado"])
-        log.info(
+        nivel = (
+            logging.INFO if manifest["estado"] == ESTADO_OK else logging.ERROR
+        )
+        log.log(
+            nivel,
             "%s (%s): %s, %d registros, %d páginas -> %s",
             nombreEndpoint,
             tipo,
@@ -656,6 +684,7 @@ class ClassExtractApi:
             manifest["registros_descargados"],
             len(manifest["archivos"]),
             manifest["ruta_gcs"],
+            extra={"json_fields": self.camposLog(manifest)},
         )
         return manifest["estado"]
 
@@ -691,12 +720,20 @@ class ClassExtractApi:
             nombre: self.ejecutarEndpoint(nombre, fecha)
             for nombre in self.listarEndpoints()
         }
-        log.info("Resumen %s: %s", fecha, resultados)
         conProblemas = [
             nombre
             for nombre, estado in resultados.items()
             if estado in (ESTADO_FALLIDO, ESTADO_INCOMPLETO)
         ]
+        log.log(
+            logging.ERROR if conProblemas else logging.INFO,
+            "Resumen %s: %s",
+            fecha,
+            resultados,
+            extra={
+                "json_fields": {"fecha_datos": fecha, "resultados": resultados}
+            },
+        )
         if conProblemas:
             raise RuntimeError(
                 f"Endpoints sin completar para {fecha}: {conProblemas}"
