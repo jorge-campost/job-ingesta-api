@@ -415,6 +415,7 @@ class ClassExtractApi:
             "duracion_seg": None,
             "airflow": {
                 "dag_id": ctx["dagId"],
+                "task_id": ctx["taskId"],
                 "run_id": ctx["airflowRunId"],
                 "intento": ctx["intento"],
             },
@@ -566,6 +567,7 @@ class ClassExtractApi:
             "ventana_hasta": manifest["ventana"]["modifiedTo"],
             "ejecucion": manifest["ejecucion"],
             "dag_id": manifest["airflow"]["dag_id"],
+            "task_id": manifest["airflow"]["task_id"],
             "airflow_run_id": manifest["airflow"]["run_id"],
             "intento": manifest["airflow"]["intento"],
             "cloud_run_execution": manifest["cloud_run_execution"],

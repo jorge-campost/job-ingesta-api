@@ -86,6 +86,7 @@ def contexto(**cambios) -> dict:
         "endpoints": [],
         "forzar": False,
         "dagId": "dag_prueba",
+        "taskId": "tarea_prueba",
         "airflowRunId": "manual__1",
         "intento": 1,
         "cloudRunExecution": "local",

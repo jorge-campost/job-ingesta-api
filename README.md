@@ -84,7 +84,7 @@ Un endpoint que falla no detiene a los demás. Al final, si alguno quedó `FALLI
 
 ### Manifest
 
-Uno por endpoint y ejecución. Guarda fuente, endpoint, tipo, `fecha_datos`, ventana (`modifiedFrom`/`modifiedTo`), ejecución, estado, inicio, fin, duración, datos de Airflow (DAG, run_id, intento), ejecución de Cloud Run, ruta y query params (sin credenciales), `page_size`, `total_count`, `total_pages`, registros descargados, la lista de archivos (nombre, página, registros, bytes, md5) y el error.
+Uno por endpoint y ejecución. Guarda fuente, endpoint, tipo, `fecha_datos`, ventana (`modifiedFrom`/`modifiedTo`), ejecución, estado, inicio, fin, duración, datos de Airflow (DAG, tarea, run_id, intento), ejecución de Cloud Run, ruta y query params (sin credenciales), `page_size`, `total_count`, `total_pages`, registros descargados, la lista de archivos (nombre, página, registros, bytes, md5) y el error.
 
 ### Tabla de control
 
@@ -160,7 +160,7 @@ Ejemplo para un endpoint tipo CargoProduce (los nombres de parámetros son a con
 | `BUCKET`, `TABLA_LOG` | archivo `.env` | variables del job (`--set-env-vars` en `cloudbuild.yaml`) |
 | `FECHA_DATOS` | archivo `.env` | la pasa Airflow en cada ejecución (D-1). Obligatoria y exactamente `YYYY-MM-DD` |
 | `TIPO_CARGA`, `ENDPOINTS`, `FORZAR` | archivo `.env` | opcionales; Airflow las pasa en un snapshot o un reproceso |
-| `AIRFLOW_DAG_ID`, `AIRFLOW_RUN_ID`, `INTENTO` | archivo `.env` (o vacías) | las pasa Airflow (`{{ dag.dag_id }}`, `{{ run_id }}`, `{{ ti.try_number }}`) |
+| `AIRFLOW_DAG_ID`, `AIRFLOW_TASK_ID`, `AIRFLOW_RUN_ID`, `INTENTO` | archivo `.env` (o vacías) | las pasa Airflow (`{{ dag.dag_id }}`, `{{ ti.task_id }}`, `{{ run_id }}`, `{{ ti.try_number }}`) |
 | `CLOUD_RUN_EXECUTION` | no aplica (`local`) | la define Cloud Run sola |
 
 `main.py` llama a `load_dotenv()`, que busca un `.env` desde `src/` hacia arriba. Si no lo encuentra no hace nada, y nunca pisa una variable ya definida. El `.env` está en `.gitignore` y `.dockerignore`.

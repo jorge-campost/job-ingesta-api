@@ -11,7 +11,7 @@ TIPO: Cloud Run Job
 OBSERVACION: Variables de entorno: API_CONFIG (Secret Manager en Cloud
     Run, .env en local), BUCKET, FECHA_DATOS (obligatoria, YYYY-MM-DD)
     y opcionales TABLA_LOG, TIPO_CARGA, ENDPOINTS, FORZAR,
-    AIRFLOW_DAG_ID, AIRFLOW_RUN_ID e INTENTO.
+    AIRFLOW_DAG_ID, AIRFLOW_TASK_ID, AIRFLOW_RUN_ID e INTENTO.
     La auth, los endpoints y sus parámetros están en parameters.json.
 SCHEDULER: Airflow 3, diario, FECHA_DATOS = día anterior (D-1);
     reproceso manual con el parámetro fecha del DAG

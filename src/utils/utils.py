@@ -127,7 +127,8 @@ def getContexto() -> dict:
     TIPO_CARGA: incremental (por defecto) o snapshot.
     ENDPOINTS: lista separada por comas; vacía = todos los endpoints.
     FORZAR: true para volver a extraer aunque ya exista una ejecución OK.
-    AIRFLOW_DAG_ID, AIRFLOW_RUN_ID, INTENTO: los envía Airflow.
+    AIRFLOW_DAG_ID, AIRFLOW_TASK_ID, AIRFLOW_RUN_ID, INTENTO: los envía
+    Airflow.
     CLOUD_RUN_EXECUTION: lo define Cloud Run en cada ejecución.
 
     :return: contexto de la ejecución
@@ -152,6 +153,7 @@ def getContexto() -> dict:
         "endpoints": endpoints,
         "forzar": leerBooleano("FORZAR"),
         "dagId": os.environ.get("AIRFLOW_DAG_ID", "manual"),
+        "taskId": os.environ.get("AIRFLOW_TASK_ID", "manual"),
         "airflowRunId": os.environ.get("AIRFLOW_RUN_ID", "manual"),
         "intento": int(intento),
         "cloudRunExecution": os.environ.get("CLOUD_RUN_EXECUTION", "local"),

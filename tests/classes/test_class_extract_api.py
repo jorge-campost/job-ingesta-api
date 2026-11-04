@@ -199,6 +199,8 @@ def testRegistraEventosEnLog():
     assert [f["estado"] for f in filas] == ["INICIADO", "OK"]
     assert filas[1]["ventana_desde"] == "2026-11-02T00:00:00"
     assert filas[1]["registros"] == 3
+    assert filas[1]["task_id"] == "tarea_prueba"
+    assert filas[1]["airflow_run_id"] == "manual__1"
 
 
 def testNivelDeLogSegunEstado(caplog):

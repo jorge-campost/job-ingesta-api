@@ -75,9 +75,16 @@ def testGenerarEjecucion():
 
 def testContextoPorDefecto(monkeypatch):
     """Sin variables: incremental, todos los endpoints, intento 1."""
-    for v in ("TIPO_CARGA", "ENDPOINTS", "FORZAR", "INTENTO"):
+    for v in (
+        "TIPO_CARGA",
+        "ENDPOINTS",
+        "FORZAR",
+        "INTENTO",
+        "AIRFLOW_TASK_ID",
+    ):
         monkeypatch.delenv(v, raising=False)
     ctx = getContexto()
+    assert ctx["taskId"] == "manual"
     assert ctx["tipoCarga"] == "incremental"
     assert ctx["endpoints"] == []
     assert ctx["forzar"] is False
@@ -90,7 +97,9 @@ def testContextoDesdeAirflow(monkeypatch):
     monkeypatch.setenv("ENDPOINTS", "rates, currencies")
     monkeypatch.setenv("FORZAR", "true")
     monkeypatch.setenv("INTENTO", "3")
+    monkeypatch.setenv("AIRFLOW_TASK_ID", "extraer_api_a_bucket")
     ctx = getContexto()
+    assert ctx["taskId"] == "extraer_api_a_bucket"
     assert ctx["tipoCarga"] == "snapshot"
     assert ctx["endpoints"] == ["rates", "currencies"]
     assert ctx["forzar"] is True
