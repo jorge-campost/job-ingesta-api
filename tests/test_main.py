@@ -23,7 +23,7 @@ def entorno(monkeypatch):
     monkeypatch.setattr(main, "configurarLogging", lambda: None)
     monkeypatch.setenv("FECHA_DATOS", "2026-11-02")
     monkeypatch.setenv("BUCKET", "bucket-prueba")
-    monkeypatch.setenv("TABLA_LOG", "p.ext_comex.ctl_log_ingesta")
+    monkeypatch.setenv("TABLA_LOG", "p.ext__frankfurter.control_ingesta")
     monkeypatch.setenv("API_CONFIG", json.dumps({"apiUrl": "https://x"}))
     extractApi = MagicMock()
     logIngesta = MagicMock()
@@ -36,7 +36,7 @@ def testConTablaLogRegistra(entorno):
     """Instancia ClassLogIngesta con TABLA_LOG y ejecuta con la fecha."""
     extractApi, logIngesta = entorno
     main.main()
-    logIngesta.assert_called_once_with("p.ext_comex.ctl_log_ingesta")
+    logIngesta.assert_called_once_with("p.ext__frankfurter.control_ingesta")
     assert extractApi.call_args.kwargs["logIngesta"] is logIngesta.return_value
     extractApi.return_value.ejecutar.assert_called_once_with("2026-11-02")
 

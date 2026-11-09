@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 from classes.classes import ClassLogIngesta
 
-TABLA = "jclab-dev-brz-tmp.ext_comex.ctl_log_ingesta"
+TABLA = "jclab-dev-brz-tmp.ext__frankfurter.control_ingesta"
 
 
 def manifestDePrueba() -> dict:
@@ -49,13 +49,13 @@ def testRegistraUnaFila():
     tabla, filas = cliente.insert_rows_json.call_args.args
     assert tabla == TABLA
     fila = filas[0]
-    assert fila["estado"] == "OK"
-    assert fila["etapa"] == "EXTRACCION"
-    assert fila["endpoint"] == "ventas"
-    assert fila["params_dinamicos"] == '{"desde": "2026-11-02"}'
-    assert fila["registros"] == 3
-    assert fila["task_id"] == "tarea_prueba"
-    assert fila["airflow_run_id"] == "manual__1"
+    assert fila["est_evento"] == "OK"
+    assert fila["tip_etapa"] == "EXTRACCION"
+    assert fila["nom_endpoint"] == "ventas"
+    assert fila["val_parametros_dinamicos"] == '{"desde": "2026-11-02"}'
+    assert fila["cnt_registros_descargados"] == 3
+    assert fila["cod_tarea"] == "tarea_prueba"
+    assert fila["cod_ejecucion_airflow"] == "manual__1"
 
 
 def testErroresDeFilaSoloAvisan(caplog):

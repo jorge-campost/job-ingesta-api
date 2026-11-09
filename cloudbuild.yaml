@@ -20,8 +20,8 @@ substitutions:
   _SECRETO: api-config                  # llega como API_CONFIG
   _BUCKET: dev-stg-gst-comex-001
   _PROYECTO_DATASET: jclab-dev-brz-tmp  # tabla de control: proyecto.dataset.tabla
-  _DATASET: ext_comex
-  _TABLA_CONTROL: ctl_log_ingesta
+  _DATASET: ext__frankfurter
+  _TABLA_CONTROL: control_ingesta
 
   # --- Calculada: no editar --------------------------------------------------
   _IMAGE: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_AR}/${_NOMBRE_IMAGEN}

@@ -58,7 +58,7 @@ CAMPOS_POR_AUTH = {
 
 # seccion Funciones
 class ClassLogIngesta:
-    """Inserta eventos en la tabla de control ctl_log_ingesta.
+    """Inserta eventos en la tabla de control control_ingesta.
 
     Solo agrega filas, nunca actualiza. Si la inserción falla, deja un
     warning en el log y no detiene el job: la fuente de verdad es el
@@ -84,28 +84,28 @@ class ClassLogIngesta:
         :type estado: str
         """
         fila = {
-            "ts_evento": datetime.now(timezone.utc).strftime(FORMATO_UTC),
-            "etapa": "EXTRACCION",
-            "estado": estado,
-            "fuente": manifest["fuente"],
-            "endpoint": manifest["endpoint"],
-            "tipo": manifest["tipo"],
-            "fecha_datos": manifest["fecha_datos"],
-            "params_dinamicos": json.dumps(
+            "fec_evento": datetime.now(timezone.utc).strftime(FORMATO_UTC),
+            "tip_etapa": "EXTRACCION",
+            "est_evento": estado,
+            "nom_fuente": manifest["fuente"],
+            "nom_endpoint": manifest["endpoint"],
+            "tip_carga": manifest["tipo"],
+            "fec_datos": manifest["fecha_datos"],
+            "val_parametros_dinamicos": json.dumps(
                 manifest["request"]["params_dinamicos"], ensure_ascii=False
             ),
-            "ejecucion": manifest["ejecucion"],
-            "dag_id": manifest["airflow"]["dag_id"],
-            "task_id": manifest["airflow"]["task_id"],
-            "airflow_run_id": manifest["airflow"]["run_id"],
-            "intento": manifest["airflow"]["intento"],
-            "cloud_run_execution": manifest["cloud_run_execution"],
-            "total_count": manifest["total_count"],
-            "total_pages": manifest["total_pages"],
-            "registros": manifest["registros_descargados"],
-            "ruta_gcs": manifest["ruta_gcs"],
-            "error": manifest["error"],
-            "duracion_seg": manifest["duracion_seg"],
+            "cod_ejecucion": manifest["ejecucion"],
+            "cod_dag": manifest["airflow"]["dag_id"],
+            "cod_tarea": manifest["airflow"]["task_id"],
+            "cod_ejecucion_airflow": manifest["airflow"]["run_id"],
+            "num_intento": manifest["airflow"]["intento"],
+            "cod_ejecucion_cloud_run": manifest["cloud_run_execution"],
+            "cnt_registros_api": manifest["total_count"],
+            "cnt_paginas_api": manifest["total_pages"],
+            "cnt_registros_descargados": manifest["registros_descargados"],
+            "des_ruta_bucket": manifest["ruta_gcs"],
+            "des_error": manifest["error"],
+            "num_duracion_segundos": manifest["duracion_seg"],
         }
         try:
             errores = self.cliente.insert_rows_json(self.tablaLog, [fila])

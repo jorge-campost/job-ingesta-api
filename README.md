@@ -56,7 +56,7 @@ Un endpoint fallido no detiene a los demás; al final el job sale con error si a
 
 **Manifest:** datos de la ejecución, de Airflow y de Cloud Run, request (`params` y `params_dinamicos`, sin credenciales), totales, archivos (página, registros, bytes, md5) y error.
 
-**Tabla de control** (`ctl_log_ingesta`, DDL en `sql/`): una fila por evento, solo inserciones. El job no crea la tabla. Si el insert falla, deja un warning y sigue.
+**Tabla de control** (`control_ingesta`, DDL en `sql/`): una fila por evento, solo inserciones. El job no crea la tabla. Si el insert falla, deja un warning y sigue.
 
 **Logs:** en Cloud Run (`CLOUD_RUN_JOB` definida) salen como JSON estructurado, con los campos de `extra={"json_fields": {...}}` filtrables en Logs Explorer (`jsonPayload.endpoint`, `jsonPayload.fecha_datos`); en local, como texto.
 
