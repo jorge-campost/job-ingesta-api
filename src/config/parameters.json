@@ -4,9 +4,6 @@
         "tipo": "none",
         "headerApiKey": "X-API-Key"
     },
-    "ventana": {
-        "formatoFechaHora": "%Y-%m-%dT%H:%M:%S"
-    },
     "paginacion": {
         "paramPagina": "page",
         "paramTamano": "pageSize",
@@ -19,25 +16,25 @@
     },
     "endpoints": {
         "rates": {
+            "carpeta": "rates",
             "ruta": "/rates",
             "modo": "incremental",
             "paginado": false,
-            "params": [],
-            "paramsIncrementales": [
-                {"nombre": "date", "valor": "{fecha}"}
+            "params": [
+                {"nombre": "date", "valor": "{env:FECHA_DATOS}"}
             ]
         },
         "currencies": {
+            "carpeta": "currencies",
             "ruta": "/currencies",
             "modo": "snapshot",
             "paginado": false,
-            "params": [],
-            "paramsIncrementales": []
+            "params": []
         }
     },
     "paths": {
-        "plantillaPrefijo": "{fuente}/{endpoint}/tipo={tipo}/fecha_datos={fecha}/ejecucion={ejecucion}/",
-        "plantillaArchivo": "{fuente}_{endpoint}_{tipoCorto}_{fechaCompacta}_p{pagina:05d}{extension}",
+        "plantillaPrefijo": "{fuente}/{carpeta}/fecha_datos={fecha}/tipo_carga={tipo}/ejecucion={ejecucion}/",
+        "plantillaArchivo": "{fuente}_{carpeta}_{tipoCorto}_{fechaCompacta}_p{pagina:05d}{extension}",
         "nombreManifest": "_manifest.json"
     },
     "filesExt": {

@@ -7,10 +7,9 @@ CREATE TABLE IF NOT EXISTS `jclab-dev-brz-tmp.ext_comex.ctl_log_ingesta` (
   estado STRING NOT NULL,           -- INICIADO / OK / FALLIDO / INCOMPLETO / OMITIDO
   fuente STRING NOT NULL,
   endpoint STRING NOT NULL,
-  tipo STRING,                      -- incremental / snapshot
+  tipo STRING,                      -- modo del endpoint en parameters.json: incremental / snapshot
   fecha_datos DATE,
-  ventana_desde TIMESTAMP,          -- modifiedFrom (vacío en snapshot)
-  ventana_hasta TIMESTAMP,          -- modifiedTo (vacío en snapshot)
+  params_dinamicos STRING,          -- JSON con los params que vinieron de variables de entorno ({env:...})
   ejecucion STRING,                 -- carpeta ejecucion=YYYYMMDDTHHMMSSZ
   dag_id STRING,
   task_id STRING,                   -- tarea de Airflow (extraer_api_a_bucket)

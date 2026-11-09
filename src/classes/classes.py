@@ -1,42 +1,40 @@
 """Clases del Job 1: extracción desde la API y guardado en GCS.
 
-PROYECTO: Pipeline ETL en GCP - Capa Bronce
-NOMBRE: classes.py
-ARCHIVOS DESTINO: gs://<BUCKET>/<fuente>/<endpoint>/tipo=<tipo>/
-    fecha_datos=<FECHA_DATOS>/ejecucion=<YYYYMMDDTHHMMSSZ>/
-    <fuente>_<endpoint>_<inc|snap>_<YYYYMMDD>_p<NNNNN>.json y
-    _manifest.json
+PROYECTO        : Pipeline ETL en GCP - Capa Bronce
+NOMBRE          : classes.py
+ARCHIVOS DESTINO: gs://<BUCKET>/<fuente>/<carpeta>/fecha_datos=<FECHA_DATOS>/
+                  tipo_carga=<modo>/ejecucion=<YYYYMMDDTHHMMSSZ>/
+                  <fuente>_<carpeta>_<inc|snap>_<YYYYMMDD>_p<NNNNN>.json y
+                  _manifest.json
 ARCHIVOS FUENTES: API configurada en parameters.json
-OBJETIVO: Extraer los datos crudos de la API y guardarlos sin cambios,
-    página por página, con un manifest por endpoint y ejecución.
-TIPO: Módulo de clases
-OBSERVACION: Cada método hace una sola tarea. Un endpoint que falla no
-    detiene a los demás; el job termina con error al final.
-SCHEDULER: Airflow 3, diario, FECHA_DATOS = día anterior (D-1)
-VERSION: 1.3
-DESARROLLADOR: Jorge
-PROVEEDOR: Frankfurter (laboratorio)
-FECHA: 2026-11-04
-DESCRIPCION: Define ClassExtractApi (alias CEA en main.py) y
-    ClassLogIngesta (alias CLI), que escribe en la tabla de control.
+OBJETIVO        : Extraer los datos crudos de la API y guardarlos sin cambios,
+                  página por página, con un manifest por endpoint y ejecución.
+TIPO            : Módulo de clases
+OBSERVACION     : Cada método hace una sola tarea. Un endpoint que falla no
+                  detiene a los demás; el job termina con error al final.
+SCHEDULER       : Airflow 3, diario, FECHA_DATOS = día anterior (D-1)
+VERSION         : 1.5
+DESARROLLADOR   : Jorge
+PROVEEDOR       : Frankfurter (laboratorio)
+FECHA           : 2026-11-06
+DESCRIPCION     : Define ClassExtractApi, que extrae y guarda en GCS, y
+                  ClassLogIngesta, que escribe en la tabla de control.
 """
 
 # seccion Imports
 import hashlib
 import json
 import logging
+import os
+import re
+from datetime import datetime, timezone
 
 import requests
-from google.cloud import storage
+from google.cloud import bigquery, storage
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from utils.utils import (
-    ahoraUtc,
-    calcularVentana,
-    formatearUtc,
-    generarEjecucion,
-)
+from utils.utils import FORMATO_EJECUCION, FORMATO_UTC
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +45,15 @@ ESTADO_OMITIDO = "OMITIDO"
 ESTADO_INICIADO = "INICIADO"
 TIPO_CORTO = {"incremental": "inc", "snapshot": "snap"}
 LARGO_MAXIMO_ERROR = 1000
+# Marcador de parameters.json que toma el valor de una variable de entorno
+PATRON_ENV = re.compile(r"\{env:([A-Za-z_][A-Za-z0-9_]*)\}")
+# Claves que debe tener el secreto API_CONFIG según el tipo de auth
+CAMPOS_POR_AUTH = {
+    "none": {"apiUrl"},
+    "basic": {"apiUrl", "username", "password"},
+    "bearer": {"apiUrl", "token"},
+    "apiKey": {"apiUrl", "apiKey"},
+}
 
 
 # seccion Funciones
@@ -65,19 +72,41 @@ class ClassLogIngesta:
 
     def __init__(self, tablaLog: str, clienteBigquery=None) -> None:
         """Guarda la tabla y crea el cliente si hace falta."""
-        if clienteBigquery is None:
-            from google.cloud import bigquery
-
-            clienteBigquery = bigquery.Client()
         self.tablaLog = tablaLog
-        self.cliente = clienteBigquery
+        self.cliente = clienteBigquery or bigquery.Client()
 
-    def registrar(self, fila: dict) -> None:
-        """Inserta una fila en la tabla de control.
+    def registrar(self, manifest: dict, estado: str) -> None:
+        """Inserta en la tabla de control un evento de la ejecución.
 
-        :param fila: evento con las columnas de ctl_log_ingesta
-        :type fila: dict
+        :param manifest: manifest de la ejecución
+        :type manifest: dict
+        :param estado: estado del evento
+        :type estado: str
         """
+        fila = {
+            "ts_evento": datetime.now(timezone.utc).strftime(FORMATO_UTC),
+            "etapa": "EXTRACCION",
+            "estado": estado,
+            "fuente": manifest["fuente"],
+            "endpoint": manifest["endpoint"],
+            "tipo": manifest["tipo"],
+            "fecha_datos": manifest["fecha_datos"],
+            "params_dinamicos": json.dumps(
+                manifest["request"]["params_dinamicos"], ensure_ascii=False
+            ),
+            "ejecucion": manifest["ejecucion"],
+            "dag_id": manifest["airflow"]["dag_id"],
+            "task_id": manifest["airflow"]["task_id"],
+            "airflow_run_id": manifest["airflow"]["run_id"],
+            "intento": manifest["airflow"]["intento"],
+            "cloud_run_execution": manifest["cloud_run_execution"],
+            "total_count": manifest["total_count"],
+            "total_pages": manifest["total_pages"],
+            "registros": manifest["registros_descargados"],
+            "ruta_gcs": manifest["ruta_gcs"],
+            "error": manifest["error"],
+            "duracion_seg": manifest["duracion_seg"],
+        }
         try:
             errores = self.cliente.insert_rows_json(self.tablaLog, [fila])
             if errores:
@@ -93,31 +122,32 @@ class ClassExtractApi:
 
     :param apiConfig: secreto con apiUrl y las credenciales de la auth
     :type apiConfig: dict
-    :param parametros: contenido de config/parameters.json
-    :type parametros: dict
+    :param parametrosApi: contenido de config/parameters.json
+    :type parametrosApi: dict
     :param nombreBucket: bucket de crudos
     :type nombreBucket: str
-    :param contexto: variables de la ejecución (ver utils.getContexto)
-    :type contexto: dict
+    :param contextoEjecucion: variables de la ejecución (ver
+        utils.getContextoEjecucion)
+    :type contextoEjecucion: dict
+    :param logIngesta: tabla de control
+    :type logIngesta: ClassLogIngesta
     :param clienteStorage: cliente de GCS; si es None se crea uno
     :type clienteStorage: google.cloud.storage.Client or None
-    :param logIngesta: tabla de control; si es None no se registra
-    :type logIngesta: ClassLogIngesta or None
     """
 
     def __init__(
         self,
         apiConfig: dict,
-        parametros: dict,
+        parametrosApi: dict,
         nombreBucket: str,
-        contexto: dict,
+        contextoEjecucion: dict,
+        logIngesta: ClassLogIngesta,
         clienteStorage: storage.Client = None,
-        logIngesta: ClassLogIngesta = None,
     ) -> None:
         """Inicializa la sesión HTTP y el bucket de destino."""
         self.apiConfig = apiConfig
-        self.parametros = parametros
-        self.contexto = contexto
+        self.parametrosApi = parametrosApi
+        self.contextoEjecucion = contextoEjecucion
         self.logIngesta = logIngesta
         self.urlBase = apiConfig["apiUrl"].rstrip("/")
         self.sesion = self.crearSesion()
@@ -133,7 +163,7 @@ class ClassExtractApi:
         :return: sesión lista para llamar a la API
         :rtype: requests.Session
         """
-        otros = self.parametros["others"]
+        otros = self.parametrosApi["others"]
         reintentos = Retry(
             total=otros["reintentos"],
             backoff_factor=otros["backoffFactor"],
@@ -142,94 +172,69 @@ class ClassExtractApi:
         )
         sesion = requests.Session()
         sesion.mount("https://", HTTPAdapter(max_retries=reintentos))
-        self.aplicarAuth(sesion)
+        sesion.auth, headers = self.armarAutenticacion()
+        sesion.headers.update(headers)
         return sesion
 
-    def aplicarAuth(self, sesion: requests.Session) -> None:
-        """Agrega a la sesión la autenticación de parameters.json.
+    def armarAutenticacion(self) -> tuple:
+        """Arma la autenticación según auth.tipo de parameters.json.
 
         Tipos: none, basic (usuario y contraseña), bearer y apiKey.
+        Antes valida que API_CONFIG traiga las claves de ese tipo.
 
-        :param sesion: sesión HTTP a configurar
-        :type sesion: requests.Session
+        :return: (auth para requests o None, headers a agregar)
+        :rtype: tuple
+        :raises ValueError: si el tipo no existe o faltan claves
         """
-        auth = self.parametros["auth"]
+        auth = self.parametrosApi["auth"]
         cfg = self.apiConfig
+        if auth["tipo"] not in CAMPOS_POR_AUTH:
+            raise ValueError(
+                f"auth.tipo {auth['tipo']!r} no válido. "
+                f"Usa uno de {sorted(CAMPOS_POR_AUTH)}"
+            )
+        faltantes = CAMPOS_POR_AUTH[auth["tipo"]] - cfg.keys()
+        if faltantes:
+            raise ValueError(
+                f"API_CONFIG no tiene los campos {sorted(faltantes)}"
+            )
         if auth["tipo"] == "basic":
-            sesion.auth = (cfg["username"], cfg["password"])
-        elif auth["tipo"] == "bearer":
-            sesion.headers["Authorization"] = f"Bearer {cfg['token']}"
-        elif auth["tipo"] == "apiKey":
-            sesion.headers[auth["headerApiKey"]] = cfg["apiKey"]
+            return (cfg["username"], cfg["password"]), {}
+        if auth["tipo"] == "bearer":
+            return None, {"Authorization": f"Bearer {cfg['token']}"}
+        if auth["tipo"] == "apiKey":
+            return None, {auth["headerApiKey"]: cfg["apiKey"]}
+        return None, {}
 
     # --- Parámetros y rutas --------------------------------------------
-    def tipoEfectivo(self, nombreEndpoint: str) -> str:
-        """Decide si un endpoint se extrae como incremental o snapshot.
-
-        Un endpoint con modo snapshot (por ejemplo, un catálogo) siempre
-        se extrae completo. Con TIPO_CARGA=snapshot, todos se extraen
-        completos.
-
-        :param nombreEndpoint: clave del endpoint en parameters.json
-        :type nombreEndpoint: str
-        :return: incremental o snapshot
-        :rtype: str
-        """
-        modo = self.parametros["endpoints"][nombreEndpoint]["modo"]
-        if self.contexto["tipoCarga"] == "snapshot" or modo == "snapshot":
-            return "snapshot"
-        return "incremental"
-
-    def calcularVentana(self, fecha: str, tipo: str) -> tuple:
-        """Devuelve (modifiedFrom, modifiedTo) o (None, None) en snapshot.
-
-        :param fecha: fecha de datos (YYYY-MM-DD)
-        :type fecha: str
-        :param tipo: incremental o snapshot
-        :type tipo: str
-        :return: inicio y fin de la ventana
-        :rtype: tuple
-        """
-        if tipo == "snapshot":
-            return None, None
-        formato = self.parametros["ventana"]["formatoFechaHora"]
-        return calcularVentana(fecha, formato)
-
-    def armarParametros(
-        self, nombreEndpoint: str, fecha: str, tipo: str
-    ) -> dict:
+    def armarParametros(self, nombreEndpoint: str) -> tuple:
         """Arma los query params de un endpoint, sin los de paginación.
 
-        Usa params siempre y paramsIncrementales solo en incremental.
-        En cada valor se reemplazan {fecha}, {modifiedFrom} y
-        {modifiedTo}.
+        Todo lo que está en la lista params se envía. Un valor fijo va
+        tal cual; un valor {env:NOMBRE} toma la variable de entorno
+        NOMBRE (del .env en local o de Airflow en Cloud Run).
 
         :param nombreEndpoint: clave del endpoint en parameters.json
         :type nombreEndpoint: str
-        :param fecha: fecha de datos (YYYY-MM-DD)
-        :type fecha: str
-        :param tipo: incremental o snapshot
-        :type tipo: str
-        :return: parámetros de la URL
-        :rtype: dict
+        :return: (todos los parámetros, los que vinieron de variables)
+        :rtype: tuple
+        :raises ValueError: si falta una variable de entorno usada
         """
-        endpoint = self.parametros["endpoints"][nombreEndpoint]
-        lista = list(endpoint.get("params", []))
-        if tipo == "incremental":
-            lista += endpoint.get("paramsIncrementales", [])
-        desde, hasta = self.calcularVentana(fecha, tipo)
-        reemplazos = {
-            "{fecha}": fecha,
-            "{modifiedFrom}": desde or "",
-            "{modifiedTo}": hasta or "",
-        }
         parametros = {}
-        for p in lista:
+        dinamicos = {}
+        for p in self.parametrosApi["endpoints"][nombreEndpoint]["params"]:
             valor = str(p["valor"])
-            for marcador, texto in reemplazos.items():
-                valor = valor.replace(marcador, texto)
+            for variable in PATRON_ENV.findall(valor):
+                texto = os.environ.get(variable, "")
+                if not texto:
+                    raise ValueError(
+                        f"Falta la variable {variable} para el parámetro "
+                        f"{p['nombre']!r} de {nombreEndpoint}"
+                    )
+                valor = valor.replace("{env:" + variable + "}", texto)
+                dinamicos[p["nombre"]] = valor
             parametros[p["nombre"]] = valor
-        return parametros
+        return parametros, dinamicos
 
     def armarPrefijo(
         self, nombreEndpoint: str, tipo: str, fecha: str, ejecucion: str
@@ -247,9 +252,9 @@ class ClassExtractApi:
         :return: prefijo terminado en /, sin el nombre del bucket
         :rtype: str
         """
-        return self.parametros["paths"]["plantillaPrefijo"].format(
-            fuente=self.parametros["fuente"],
-            endpoint=nombreEndpoint,
+        return self.parametrosApi["paths"]["plantillaPrefijo"].format(
+            fuente=self.parametrosApi["fuente"],
+            carpeta=self.parametrosApi["endpoints"][nombreEndpoint]["carpeta"],
             tipo=tipo,
             fecha=fecha,
             ejecucion=ejecucion,
@@ -271,18 +276,22 @@ class ClassExtractApi:
         :return: por ejemplo frankfurter_rates_inc_20261102_p00001.json
         :rtype: str
         """
-        return self.parametros["paths"]["plantillaArchivo"].format(
-            fuente=self.parametros["fuente"],
-            endpoint=nombreEndpoint,
+        return self.parametrosApi["paths"]["plantillaArchivo"].format(
+            fuente=self.parametrosApi["fuente"],
+            carpeta=self.parametrosApi["endpoints"][nombreEndpoint]["carpeta"],
             tipoCorto=TIPO_CORTO[tipo],
             fechaCompacta=fecha.replace("-", ""),
             pagina=pagina,
-            extension=self.parametros["filesExt"]["extension"],
+            extension=self.parametrosApi["filesExt"]["extension"],
         )
 
     # --- API y bucket --------------------------------------------------
     def llamarApi(self, ruta: str, parametros: dict):
         """Llama a la API y devuelve su respuesta.
+
+        Deja en el log la URL completa del GET (URL base, ruta y query
+        params) para ver cómo se armó. Las credenciales van en headers
+        o en auth, nunca en la URL.
 
         :param ruta: ruta del endpoint, por ejemplo /rates
         :type ruta: str
@@ -292,10 +301,15 @@ class ClassExtractApi:
         :rtype: list or dict
         :raises requests.HTTPError: si la API responde con error
         """
+        urlCompleta = (
+            requests.Request("GET", self.urlBase + ruta, params=parametros)
+            .prepare()
+            .url
+        )
+        log.info("GET %s", urlCompleta)
         respuesta = self.sesion.get(
-            self.urlBase + ruta,
-            params=parametros,
-            timeout=self.parametros["others"]["timeoutSegundos"],
+            urlCompleta,
+            timeout=self.parametrosApi["others"]["timeoutSegundos"],
         )
         respuesta.raise_for_status()
         return respuesta.json()
@@ -313,7 +327,7 @@ class ClassExtractApi:
         contenido = json.dumps(datos, ensure_ascii=False).encode("utf-8")
         self.bucket.blob(rutaDestino).upload_from_string(
             contenido,
-            content_type=self.parametros["filesExt"]["contentType"],
+            content_type=self.parametrosApi["filesExt"]["contentType"],
         )
         return {
             "bytes": len(contenido),
@@ -334,7 +348,7 @@ class ClassExtractApi:
         """
         prefijoDia = self.armarPrefijo(nombreEndpoint, tipo, fecha, "")
         prefijoDia = prefijoDia[: prefijoDia.rindex("ejecucion=")]
-        nombreManifest = "/" + self.parametros["paths"]["nombreManifest"]
+        nombreManifest = "/" + self.parametrosApi["paths"]["nombreManifest"]
         manifests = sorted(
             (
                 b
@@ -361,7 +375,7 @@ class ClassExtractApi:
         :return: cantidad de registros
         :rtype: int
         """
-        campoItems = self.parametros["paginacion"]["campoItems"]
+        campoItems = self.parametrosApi["paginacion"]["campoItems"]
         if isinstance(respuesta, dict) and isinstance(
             respuesta.get(campoItems), list
         ):
@@ -395,22 +409,22 @@ class ClassExtractApi:
         :return: manifest inicial
         :rtype: dict
         """
-        desde, hasta = self.calcularVentana(fecha, tipo)
-        endpoint = self.parametros["endpoints"][nombreEndpoint]
-        ctx = self.contexto
+        endpoint = self.parametrosApi["endpoints"][nombreEndpoint]
+        params, dinamicos = self.armarParametros(nombreEndpoint)
+        ctx = self.contextoEjecucion
         return {
-            "fuente": self.parametros["fuente"],
+            "fuente": self.parametrosApi["fuente"],
             "endpoint": nombreEndpoint,
+            "carpeta": endpoint["carpeta"],
             "tipo": tipo,
             "fecha_datos": fecha,
-            "ventana": {"modifiedFrom": desde, "modifiedTo": hasta},
             "ejecucion": ejecucion,
             "ruta_gcs": "gs://{}/{}".format(
                 self.bucket.name,
                 self.armarPrefijo(nombreEndpoint, tipo, fecha, ejecucion),
             ),
             "estado": ESTADO_INICIADO,
-            "inicio_utc": formatearUtc(inicio),
+            "inicio_utc": inicio.strftime(FORMATO_UTC),
             "fin_utc": None,
             "duracion_seg": None,
             "airflow": {
@@ -422,7 +436,8 @@ class ClassExtractApi:
             "cloud_run_execution": ctx["cloudRunExecution"],
             "request": {
                 "ruta": endpoint["ruta"],
-                "params": self.armarParametros(nombreEndpoint, fecha, tipo),
+                "params": params,
+                "params_dinamicos": dinamicos,
             },
             "paginado": endpoint.get("paginado", False),
             "page_size": None,
@@ -434,89 +449,115 @@ class ClassExtractApi:
             "error": None,
         }
 
-    def descargarPaginas(self, manifest: dict, prefijo: str) -> None:
+    def descargarPaginas(self, manifest: dict, prefijo: str) -> dict:
         """Descarga todas las páginas y guarda cada una apenas llega.
 
         Sin paginación hace una sola llamada. Con paginación lee
         totalCount y totalPages de la primera página y sigue hasta
-        totalPages. Completa el manifest a medida que avanza.
+        totalPages. No modifica el manifest: devuelve lo descargado,
+        también si falla a mitad, para que queden las páginas guardadas.
 
-        :param manifest: manifest de la ejecución (se modifica)
+        :param manifest: manifest inicial de la ejecución
         :type manifest: dict
         :param prefijo: carpeta de la ejecución en el bucket
         :type prefijo: str
-        :raises RuntimeError: si se supera maxPaginas
+        :return: page_size, total_count, total_pages, archivos,
+            registros_descargados, observaciones y error (None si no
+            falló)
+        :rtype: dict
         """
-        cfg = self.parametros["paginacion"]
+        cfg = self.parametrosApi["paginacion"]
         nombreEndpoint = manifest["endpoint"]
         ruta = manifest["request"]["ruta"]
         paginado = manifest["paginado"]
         parametros = dict(manifest["request"]["params"])
+        resultado = {
+            "page_size": cfg["tamanoPagina"] if paginado else None,
+            "total_count": None,
+            "total_pages": None,
+            "archivos": [],
+            "registros_descargados": 0,
+            "observaciones": [],
+            "error": None,
+        }
         if paginado:
-            manifest["page_size"] = cfg["tamanoPagina"]
             parametros[cfg["paramTamano"]] = cfg["tamanoPagina"]
         pagina = 1
-        while True:
-            if paginado:
-                parametros[cfg["paramPagina"]] = (
-                    cfg["paginaInicial"] + pagina - 1
+        try:
+            while True:
+                if paginado:
+                    parametros[cfg["paramPagina"]] = (
+                        cfg["paginaInicial"] + pagina - 1
+                    )
+                respuesta = self.llamarApi(ruta, dict(parametros))
+                nombre = self.armarNombreArchivo(
+                    nombreEndpoint,
+                    manifest["tipo"],
+                    manifest["fecha_datos"],
+                    pagina,
                 )
-            respuesta = self.llamarApi(ruta, dict(parametros))
-            nombre = self.armarNombreArchivo(
+                datosArchivo = self.guardarCrudo(respuesta, prefijo + nombre)
+                registros = self.contarItems(respuesta, paginado)
+                resultado["archivos"].append(
+                    {
+                        "nombre": nombre,
+                        "pagina": pagina,
+                        "registros": registros,
+                        **datosArchivo,
+                    }
+                )
+                resultado["registros_descargados"] += registros
+                if not paginado:
+                    break
+                totales = self.leerTotales(respuesta)
+                if pagina == 1:
+                    resultado["total_count"], resultado["total_pages"] = (
+                        totales
+                    )
+                elif totales != (
+                    resultado["total_count"],
+                    resultado["total_pages"],
+                ):
+                    resultado["observaciones"].append(
+                        f"Página {pagina}: totalCount={totales[0]}, "
+                        f"totalPages={totales[1]} distintos a la página 1"
+                    )
+                if pagina >= (resultado["total_pages"] or 0):
+                    break
+                if pagina >= cfg["maxPaginas"]:
+                    raise RuntimeError(
+                        f"Se superó maxPaginas ({cfg['maxPaginas']})"
+                    )
+                pagina += 1
+        except Exception as error:  # noqa: BLE001 - se registra y sigue
+            resultado["error"] = f"{type(error).__name__}: {error}"[
+                :LARGO_MAXIMO_ERROR
+            ]
+            log.exception(
+                "%s: falló la extracción",
                 nombreEndpoint,
-                manifest["tipo"],
-                manifest["fecha_datos"],
-                pagina,
+                extra={
+                    "json_fields": {
+                        **self.camposLog(manifest),
+                        "estado": ESTADO_FALLIDO,
+                    }
+                },
             )
-            datosArchivo = self.guardarCrudo(respuesta, prefijo + nombre)
-            registros = self.contarItems(respuesta, paginado)
-            manifest["archivos"].append(
-                {
-                    "nombre": nombre,
-                    "pagina": pagina,
-                    "registros": registros,
-                    **datosArchivo,
-                }
-            )
-            manifest["registros_descargados"] += registros
-            if not paginado:
-                return
-            self.leerTotales(manifest, respuesta, pagina)
-            if pagina >= (manifest["total_pages"] or 0):
-                return
-            if pagina >= cfg["maxPaginas"]:
-                raise RuntimeError(
-                    f"Se superó maxPaginas ({cfg['maxPaginas']})"
-                )
-            pagina += 1
+        return resultado
 
-    def leerTotales(self, manifest: dict, respuesta, pagina: int) -> None:
-        """Guarda totalCount y totalPages de la primera página.
+    def leerTotales(self, respuesta: dict) -> tuple:
+        """Lee totalCount y totalPages de una página.
 
-        En las siguientes, anota si cambiaron: significa que los datos
-        se modificaron mientras se paginaba.
-
-        :param manifest: manifest de la ejecución (se modifica)
-        :type manifest: dict
         :param respuesta: respuesta JSON de la página
         :type respuesta: dict
-        :param pagina: número de página, desde 1
-        :type pagina: int
+        :return: (totalCount, totalPages); None si la API no los trae
+        :rtype: tuple
         """
-        cfg = self.parametros["paginacion"]
-        totalCount = respuesta.get(cfg["campoTotalCount"])
-        totalPages = respuesta.get(cfg["campoTotalPages"])
-        if pagina == 1:
-            manifest["total_count"] = totalCount
-            manifest["total_pages"] = totalPages
-        elif (totalCount, totalPages) != (
-            manifest["total_count"],
-            manifest["total_pages"],
-        ):
-            manifest["observaciones"].append(
-                f"Página {pagina}: totalCount={totalCount}, "
-                f"totalPages={totalPages} distintos a la página 1"
-            )
+        cfg = self.parametrosApi["paginacion"]
+        return (
+            respuesta.get(cfg["campoTotalCount"]),
+            respuesta.get(cfg["campoTotalPages"]),
+        )
 
     def validarCompletitud(self, manifest: dict) -> list:
         """Compara lo descargado con lo que informó la API.
@@ -545,40 +586,6 @@ class ClassExtractApi:
         return problemas
 
     # --- Tabla de control ----------------------------------------------
-    def armarFilaLog(self, manifest: dict, estado: str) -> dict:
-        """Convierte el manifest en una fila de ctl_log_ingesta.
-
-        :param manifest: manifest de la ejecución
-        :type manifest: dict
-        :param estado: estado del evento
-        :type estado: str
-        :return: fila con las columnas de la tabla de control
-        :rtype: dict
-        """
-        return {
-            "ts_evento": formatearUtc(ahoraUtc()),
-            "etapa": "EXTRACCION",
-            "estado": estado,
-            "fuente": manifest["fuente"],
-            "endpoint": manifest["endpoint"],
-            "tipo": manifest["tipo"],
-            "fecha_datos": manifest["fecha_datos"],
-            "ventana_desde": manifest["ventana"]["modifiedFrom"],
-            "ventana_hasta": manifest["ventana"]["modifiedTo"],
-            "ejecucion": manifest["ejecucion"],
-            "dag_id": manifest["airflow"]["dag_id"],
-            "task_id": manifest["airflow"]["task_id"],
-            "airflow_run_id": manifest["airflow"]["run_id"],
-            "intento": manifest["airflow"]["intento"],
-            "cloud_run_execution": manifest["cloud_run_execution"],
-            "total_count": manifest["total_count"],
-            "total_pages": manifest["total_pages"],
-            "registros": manifest["registros_descargados"],
-            "ruta_gcs": manifest["ruta_gcs"],
-            "error": manifest["error"],
-            "duracion_seg": manifest["duracion_seg"],
-        }
-
     def camposLog(self, manifest: dict) -> dict:
         """Campos para filtrar los logs en Cloud Logging.
 
@@ -600,21 +607,21 @@ class ClassExtractApi:
         }
 
     def registrarEvento(self, manifest: dict, estado: str) -> None:
-        """Registra un evento en la tabla de control, si está configurada.
+        """Registra un evento en la tabla de control.
 
         :param manifest: manifest de la ejecución
         :type manifest: dict
         :param estado: estado del evento
         :type estado: str
         """
-        if self.logIngesta is not None:
-            self.logIngesta.registrar(self.armarFilaLog(manifest, estado))
+        self.logIngesta.registrar(manifest, estado)
 
     # --- Orquestación --------------------------------------------------
     def ejecutarEndpoint(self, nombreEndpoint: str, fecha: str) -> str:
         """Extrae un endpoint y escribe su manifest, aunque falle.
 
-        Si ya existe una ejecución OK para el mismo día y tipo, y no se
+        El tipo es el modo del endpoint en parameters.json. Si ya existe
+        una ejecución OK para la misma carpeta, día y tipo, y no se
         pidió FORZAR, lo omite: así un reintento de Airflow solo repite
         los endpoints que fallaron.
 
@@ -625,8 +632,8 @@ class ClassExtractApi:
         :return: estado final (OK, FALLIDO, INCOMPLETO u OMITIDO)
         :rtype: str
         """
-        tipo = self.tipoEfectivo(nombreEndpoint)
-        if not self.contexto["forzar"]:
+        tipo = self.parametrosApi["endpoints"][nombreEndpoint]["modo"]
+        if not self.contextoEjecucion["forzar"]:
             rutaOk = self.buscarEjecucionOk(nombreEndpoint, tipo, fecha)
             if rutaOk:
                 log.info(
@@ -637,43 +644,40 @@ class ClassExtractApi:
                 )
                 ejecucionOk = rutaOk.rstrip("/").split("ejecucion=")[-1]
                 manifest = self.iniciarManifest(
-                    nombreEndpoint, tipo, fecha, ejecucionOk, ahoraUtc()
+                    nombreEndpoint,
+                    tipo,
+                    fecha,
+                    ejecucionOk,
+                    datetime.now(timezone.utc),
                 )
                 self.registrarEvento(manifest, ESTADO_OMITIDO)
                 return ESTADO_OMITIDO
 
-        inicio = ahoraUtc()
-        ejecucion = generarEjecucion(inicio)
+        inicio = datetime.now(timezone.utc)
+        ejecucion = inicio.strftime(FORMATO_EJECUCION)
         prefijo = self.armarPrefijo(nombreEndpoint, tipo, fecha, ejecucion)
         manifest = self.iniciarManifest(
             nombreEndpoint, tipo, fecha, ejecucion, inicio
         )
         self.registrarEvento(manifest, ESTADO_INICIADO)
-        try:
-            self.descargarPaginas(manifest, prefijo)
+        manifest = {**manifest, **self.descargarPaginas(manifest, prefijo)}
+        if manifest["error"]:
+            estado, error = ESTADO_FALLIDO, manifest["error"]
+        else:
             problemas = self.validarCompletitud(manifest)
-            if problemas:
-                manifest["estado"] = ESTADO_INCOMPLETO
-                manifest["error"] = "; ".join(problemas)
-            else:
-                manifest["estado"] = ESTADO_OK
-        except Exception as error:  # noqa: BLE001 - se registra y sigue
-            manifest["estado"] = ESTADO_FALLIDO
-            manifest["error"] = f"{type(error).__name__}: {error}"[
-                :LARGO_MAXIMO_ERROR
-            ]
-            log.exception(
-                "%s: falló la extracción",
-                nombreEndpoint,
-                extra={"json_fields": self.camposLog(manifest)},
-            )
-        finally:
-            fin = ahoraUtc()
-            manifest["fin_utc"] = formatearUtc(fin)
-            manifest["duracion_seg"] = round((fin - inicio).total_seconds(), 3)
-            nombreManifest = self.parametros["paths"]["nombreManifest"]
-            self.guardarCrudo(manifest, prefijo + nombreManifest)
-            self.registrarEvento(manifest, manifest["estado"])
+            estado = ESTADO_INCOMPLETO if problemas else ESTADO_OK
+            error = "; ".join(problemas) or None
+        fin = datetime.now(timezone.utc)
+        manifest = {
+            **manifest,
+            "estado": estado,
+            "error": error,
+            "fin_utc": fin.strftime(FORMATO_UTC),
+            "duracion_seg": round((fin - inicio).total_seconds(), 3),
+        }
+        nombreManifest = self.parametrosApi["paths"]["nombreManifest"]
+        self.guardarCrudo(manifest, prefijo + nombreManifest)
+        self.registrarEvento(manifest, estado)
         nivel = (
             logging.INFO if manifest["estado"] == ESTADO_OK else logging.ERROR
         )
@@ -697,8 +701,8 @@ class ClassExtractApi:
         :rtype: list
         :raises ValueError: si ENDPOINTS trae un nombre que no existe
         """
-        todos = list(self.parametros["endpoints"])
-        pedidos = self.contexto["endpoints"]
+        todos = list(self.parametrosApi["endpoints"])
+        pedidos = self.contextoEjecucion["endpoints"]
         if not pedidos:
             return todos
         desconocidos = sorted(set(pedidos) - set(todos))
@@ -715,12 +719,17 @@ class ClassExtractApi:
         :type fecha: str
         :return: estado por endpoint
         :rtype: dict
+        :raises ValueError: si falta una variable {env:...}, antes de
+            extraer cualquier endpoint
         :raises RuntimeError: si algún endpoint quedó FALLIDO o
             INCOMPLETO, para que Airflow reintente
         """
+        nombres = self.listarEndpoints()
+        # Error de configuración: falla antes de bajar nada
+        for nombre in nombres:
+            self.armarParametros(nombre)
         resultados = {
-            nombre: self.ejecutarEndpoint(nombre, fecha)
-            for nombre in self.listarEndpoints()
+            nombre: self.ejecutarEndpoint(nombre, fecha) for nombre in nombres
         }
         conProblemas = [
             nombre

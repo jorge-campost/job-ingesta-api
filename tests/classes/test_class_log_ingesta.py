@@ -4,28 +4,58 @@
 import logging
 from unittest.mock import MagicMock
 
-from classes.classes import ClassLogIngesta as CLI
+from classes.classes import ClassLogIngesta
 
 TABLA = "jclab-dev-brz-tmp.ext_comex.ctl_log_ingesta"
-FILA = {"etapa": "EXTRACCION", "estado": "OK", "endpoint": "rates"}
+
+
+def manifestDePrueba() -> dict:
+    """Manifest de una ejecución OK con 3 registros, de un endpoint ficticio.
+
+    :return: manifest con los campos que lee ClassLogIngesta
+    :rtype: dict
+    """
+    return {
+        "fuente": "api_prueba",
+        "endpoint": "ventas",
+        "tipo": "incremental",
+        "fecha_datos": "2026-11-02",
+        "request": {"params_dinamicos": {"desde": "2026-11-02"}},
+        "ejecucion": "20261103T112030Z",
+        "airflow": {
+            "dag_id": "dag_prueba",
+            "task_id": "tarea_prueba",
+            "run_id": "manual__1",
+            "intento": 1,
+        },
+        "cloud_run_execution": "local",
+        "total_count": 3,
+        "total_pages": 1,
+        "registros_descargados": 3,
+        "ruta_gcs": "gs://bucket-prueba/api_prueba/ventas/",
+        "error": None,
+        "duracion_seg": 1.5,
+    }
 
 
 # seccion Funciones
 def testRegistraUnaFila():
-    """Inserta la fila tal cual en la tabla indicada."""
+    """Convierte el manifest en una fila y la inserta en la tabla."""
     cliente = MagicMock()
     cliente.insert_rows_json.return_value = []
-    CLI(TABLA, clienteBigquery=cliente).registrar(FILA)
-    cliente.insert_rows_json.assert_called_once_with(TABLA, [FILA])
-
-
-def testSoloInsertaNoCreaTabla():
-    """No crea ni modifica la tabla: eso lo hace el DDL."""
-    cliente = MagicMock()
-    cliente.insert_rows_json.return_value = []
-    CLI(TABLA, clienteBigquery=cliente).registrar(FILA)
-    cliente.create_table.assert_not_called()
-    cliente.query.assert_not_called()
+    ClassLogIngesta(TABLA, clienteBigquery=cliente).registrar(
+        manifestDePrueba(), "OK"
+    )
+    tabla, filas = cliente.insert_rows_json.call_args.args
+    assert tabla == TABLA
+    fila = filas[0]
+    assert fila["estado"] == "OK"
+    assert fila["etapa"] == "EXTRACCION"
+    assert fila["endpoint"] == "ventas"
+    assert fila["params_dinamicos"] == '{"desde": "2026-11-02"}'
+    assert fila["registros"] == 3
+    assert fila["task_id"] == "tarea_prueba"
+    assert fila["airflow_run_id"] == "manual__1"
 
 
 def testErroresDeFilaSoloAvisan(caplog):
@@ -35,7 +65,9 @@ def testErroresDeFilaSoloAvisan(caplog):
         {"index": 0, "errors": [{"reason": "invalid"}]}
     ]
     with caplog.at_level(logging.WARNING):
-        CLI(TABLA, clienteBigquery=cliente).registrar(FILA)
+        ClassLogIngesta(TABLA, clienteBigquery=cliente).registrar(
+            manifestDePrueba(), "OK"
+        )
     assert "No se pudo registrar" in caplog.text
 
 
@@ -44,5 +76,7 @@ def testExcepcionNoDetieneElJob(caplog):
     cliente = MagicMock()
     cliente.insert_rows_json.side_effect = Exception("404 Not found: Table")
     with caplog.at_level(logging.WARNING):
-        CLI(TABLA, clienteBigquery=cliente).registrar(FILA)
+        ClassLogIngesta(TABLA, clienteBigquery=cliente).registrar(
+            manifestDePrueba(), "OK"
+        )
     assert "404 Not found" in caplog.text

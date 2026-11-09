@@ -1,12 +1,59 @@
+# =============================================================================
+# cloudbuild.yaml - job-extract (Job 1: API -> bucket)
+# Pasos: 1) construye la imagen  2) la sube a Artifact Registry
+#        3) despliega (crea o actualiza) el Cloud Run Job
+#
+# DÓNDE REEMPLAZAR VALORES
+# - Solo edita el bloque "substitutions" de abajo. Los pasos (steps) usan
+#   esas variables y no hace falta tocarlos.
+# - Para otro ambiente (por ejemplo prod) sin editar este archivo: en el
+#   trigger, Advanced > Substitution variables, agrega la variable con el
+#   nuevo valor (por ejemplo _PROYECTO_JOB = acpe-prd-brz-tmp).
+#
+# Variables automáticas de Cloud Build (no se definen aquí):
+# - ${PROJECT_ID}: proyecto donde corre el build (el de Cloud Build y
+#   Artifact Registry). No es el proyecto del job.
+# - ${SHORT_SHA}: primeros 7 caracteres del commit. Se usa como tag de la
+#   imagen, así cada despliegue apunta a una versión exacta del código.
+#
+# Las variables propias deben empezar con "_" y estar en MAYÚSCULAS.
+# =============================================================================
 substitutions:
-  _IMAGE: us-central1-docker.pkg.dev/jclab-dev-dlk-services/dev-ctn-arg-comex-001/job-ingesta-api
+  # --- Región y proyectos ----------------------------------------------------
+  _REGION: us-central1                  # región de Artifact Registry y del job
+  _PROYECTO_JOB: jclab-dev-brz-tmp      # proyecto donde vive el Cloud Run Job
+  _PROYECTO_DATASET: jclab-dev-brz-tmp  # proyecto del dataset de BigQuery
+
+  # --- Imagen (Artifact Registry, en el proyecto del build) ------------------
+  _REPO_AR: dev-ctn-arg-comex-001       # repositorio Docker de Artifact Registry
+  _NOMBRE_IMAGEN: job-ingesta-api       # nombre de la imagen (igual que el repo de GitHub)
+
+  # --- Cloud Run Job ---------------------------------------------------------
+  _JOB: job-extract                     # nombre del Cloud Run Job
+  _SA_JOB: dev-seg-gsa-comex-ing-cpr    # cuenta de servicio del job, solo el nombre sin @...
+  _SECRETO: api-config                  # secreto de Secret Manager que llega como API_CONFIG
+
+  # --- Destinos de datos -----------------------------------------------------
+  _BUCKET: dev-stg-gst-comex-001        # bucket donde se guardan los JSON crudos
+  _DATASET: ext_comex                   # dataset de bronce donde está la tabla de control
+  _TABLA_CONTROL: ctl_log_ingesta       # tabla de control de la ingesta (la crea el DDL)
+
+  # --- Calculada: no reemplazar, se arma con las variables de arriba ---------
+  # Resultado: us-central1-docker.pkg.dev/jclab-dev-dlk-services/dev-ctn-arg-comex-001/job-ingesta-api
+  _IMAGE: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_AR}/${_NOMBRE_IMAGEN}
+
 steps:
+  # 1) Construye la imagen con el Dockerfile de la raíz del repo
   - id: build
     name: gcr.io/cloud-builders/docker
     args: ["build", "-t", "${_IMAGE}:${SHORT_SHA}", "."]
+
+  # 2) Sube la imagen a Artifact Registry
   - id: push
     name: gcr.io/cloud-builders/docker
     args: ["push", "${_IMAGE}:${SHORT_SHA}"]
+
+  # 3) Crea o actualiza el Cloud Run Job con la imagen nueva
   - id: deploy
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
@@ -14,15 +61,26 @@ steps:
       - run
       - jobs
       - deploy
-      - job-extract
-      - --project=jclab-dev-brz-tmp
-      - --region=us-central1
+      - ${_JOB}
+      - --project=${_PROYECTO_JOB}
+      - --region=${_REGION}
       - --image=${_IMAGE}:${SHORT_SHA}
-      - --service-account=dev-seg-gsa-comex-ing-cpr@jclab-dev-brz-tmp.iam.gserviceaccount.com
-      - --set-secrets=API_CONFIG=api-config:latest
-      - --set-env-vars=BUCKET=dev-stg-gst-comex-001,TABLA_LOG=jclab-dev-brz-tmp.ext_comex.ctl_log_ingesta
+      # Cuenta de servicio con la que corre el job (vive en el proyecto del job)
+      - --service-account=${_SA_JOB}@${_PROYECTO_JOB}.iam.gserviceaccount.com
+      # El secreto se expone como variable de entorno API_CONFIG (JSON con apiUrl y credenciales)
+      - --set-secrets=API_CONFIG=${_SECRETO}:latest
+      # Variables fijas del job. FECHA_DATOS, INTENTO, etc. las envía Airflow en cada ejecución
+      - --set-env-vars=BUCKET=${_BUCKET},TABLA_LOG=${_PROYECTO_DATASET}.${_DATASET}.${_TABLA_CONTROL}
+      # Sin reintentos en Cloud Run: los reintentos los controla Airflow (máximo 3)
       - --max-retries=0
+      # Tiempo máximo de una ejecución del job
       - --task-timeout=30m
+
+# Registra la imagen como resultado del build (visible en la pestaña Build artifacts)
 images: ["${_IMAGE}:${SHORT_SHA}"]
+
 options:
+  # Logs del build solo en Cloud Logging (no requiere bucket de logs)
   logging: CLOUD_LOGGING_ONLY
+  # Permite armar _IMAGE con otras variables (${_REGION}, ${PROJECT_ID}, ...)
+  dynamicSubstitutions: true

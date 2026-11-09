@@ -22,17 +22,17 @@ Cada ejecución queda en su propia carpeta, así que un reintento o reproceso nu
 ```
 gs://dev-stg-gst-comex-001/
   frankfurter/                                   <- fuente (parameters.json: fuente)
-    rates/                                       <- endpoint
-      tipo=incremental/
-        fecha_datos=2026-11-02/
+    rates/                                       <- carpeta del endpoint (parameters.json: carpeta)
+      fecha_datos=2026-11-02/
+        tipo_carga=incremental/                  <- modo del endpoint
           ejecucion=20261103T110512Z/            <- intento que falló
             _manifest.json                       <- estado = FALLIDO
           ejecucion=20261103T112030Z/            <- reintento
             frankfurter_rates_inc_20261102_p00001.json
             _manifest.json                       <- estado = OK
     currencies/
-      tipo=snapshot/                             <- catálogo: siempre completo
-        fecha_datos=2026-11-02/
+      fecha_datos=2026-11-02/                    <- en un snapshot, fecha de corte
+        tipo_carga=snapshot/                     <- catálogo: siempre completo
           ejecucion=20261103T112031Z/
             frankfurter_currencies_snap_20261102_p00001.json
             _manifest.json
@@ -44,24 +44,24 @@ gs://dev-stg-gst-comex-001/
 
 | Endpoint | Modo | Parámetros | Destino en el bucket |
 |---|---|---|---|
-| `/rates` | incremental | `date=FECHA_DATOS` | `frankfurter/rates/tipo=incremental/fecha_datos=FECHA_DATOS/ejecucion=.../` |
-| `/currencies` | snapshot | ninguno | `frankfurter/currencies/tipo=snapshot/fecha_datos=FECHA_DATOS/ejecucion=.../` |
+| `/rates` | incremental | `date=FECHA_DATOS` | `frankfurter/rates/fecha_datos=FECHA_DATOS/tipo_carga=incremental/ejecucion=.../` |
+| `/currencies` | snapshot | ninguno | `frankfurter/currencies/fecha_datos=FECHA_DATOS/tipo_carga=snapshot/ejecucion=.../` |
 
-La fuente del laboratorio es Frankfurter v2, que no pagina ni tiene `modifiedFrom`. Las pruebas unitarias usan respuestas con la forma real de `/rates` y `/currencies`. Para probar la paginación y la ventana `modifiedFrom`/`modifiedTo`, simulan `/rates` envuelto en `items`, `totalCount` y `totalPages`, hasta tener la API real.
+La fuente del laboratorio es Frankfurter v2, que no pagina ni tiene `modifiedFrom`. Las pruebas unitarias son generales (auth, URL, variables, contexto, tabla de control) y no dependen de los endpoints de Frankfurter, para poder copiarlas a otra API sin cambios.
 
 ## Detalles de implementación
 
 ```
 job-extract/
 ├── src/
-│   ├── main.py              # main(): lee la configuración e instancia CEA y CLI
-│   ├── classes/classes.py   # ClassExtractApi (CEA) y ClassLogIngesta (CLI)
-│   ├── utils/utils.py       # getConfig, getFechaDatos, getContexto, calcularVentana...
+│   ├── main.py              # main(): lee la configuración e instancia ClassExtractApi y ClassLogIngesta
+│   ├── classes/classes.py   # ClassExtractApi y ClassLogIngesta
+│   ├── utils/utils.py       # getConfig, getFechaDatos, getContextoEjecucion, getVariableEntorno...
 │   └── config/parameters.json
 ├── tests/                   # misma estructura que src/
-│   ├── test_main.py         # main(): condicional de TABLA_LOG
+│   ├── test_main.py         # main(): variables obligatorias
 │   ├── classes/
-│   │   ├── apoyo.py                    # datos de Frankfurter y bucket en memoria
+│   │   ├── apoyo.py                    # API_CONFIG y extractor con GCS simulado
 │   │   ├── test_class_extract_api.py   # ClassExtractApi (sin GCP ni API)
 │   │   └── test_class_log_ingesta.py   # ClassLogIngesta (sin BigQuery)
 │   └── utils/
@@ -73,7 +73,7 @@ job-extract/
 
 ### Qué hace por cada endpoint
 
-1. Decide el tipo: `snapshot` si el endpoint tiene `modo: snapshot` o si `TIPO_CARGA=snapshot`; si no, `incremental`.
+1. Toma el tipo del `modo` del endpoint en `parameters.json` (`incremental` o `snapshot`) y arma los query params de su lista `params`.
 2. Si ya existe una ejecución con manifest `OK` para ese día y tipo, lo **omite** (salvo `FORZAR=true`). Así un reintento de Airflow solo repite los endpoints que fallaron.
 3. Crea la carpeta `ejecucion=<UTC>/` y registra `INICIADO` en la tabla de control.
 4. Descarga las páginas y guarda cada una apenas llega. Con paginación, lee `totalCount` y `totalPages` de la página 1 y sigue hasta `totalPages`.
@@ -84,11 +84,11 @@ Un endpoint que falla no detiene a los demás. Al final, si alguno quedó `FALLI
 
 ### Manifest
 
-Uno por endpoint y ejecución. Guarda fuente, endpoint, tipo, `fecha_datos`, ventana (`modifiedFrom`/`modifiedTo`), ejecución, estado, inicio, fin, duración, datos de Airflow (DAG, tarea, run_id, intento), ejecución de Cloud Run, ruta y query params (sin credenciales), `page_size`, `total_count`, `total_pages`, registros descargados, la lista de archivos (nombre, página, registros, bytes, md5) y el error.
+Uno por endpoint y ejecución. Guarda fuente, endpoint, tipo, `carpeta`, `fecha_datos`, ejecución, estado, inicio, fin, duración, datos de Airflow (DAG, tarea, run_id, intento), ejecución de Cloud Run, ruta, query params y `params_dinamicos` (los que vinieron de variables de entorno; sin credenciales), `page_size`, `total_count`, `total_pages`, registros descargados, la lista de archivos (nombre, página, registros, bytes, md5) y el error.
 
 ### Tabla de control
 
-Si `TABLA_LOG` está definida, el job inserta una fila por evento en `ctl_log_ingesta` (DDL en `sql/ddl_ctl_log_ingesta.sql`). Solo inserta, nunca actualiza. Si BigQuery falla, deja un warning y sigue: la fuente de verdad es el manifest. El service account del job necesita `roles/bigquery.dataEditor` sobre el dataset `ext_comex`.
+El job inserta una fila por evento en `ctl_log_ingesta` (DDL en `sql/ddl_ctl_log_ingesta.sql`). Solo inserta, nunca actualiza. Si BigQuery falla, deja un warning y sigue: la fuente de verdad es el manifest. El service account del job necesita `roles/bigquery.dataEditor` sobre el dataset `ext_comex`.
 
 ### Logs
 
@@ -128,7 +128,14 @@ Lo que cambia de una API a otra está en `src/config/parameters.json` y en el se
 | `bearer` | header `Authorization: Bearer <token>` | `apiUrl`, `token` |
 | `apiKey` | header indicado en `auth.headerApiKey` (por defecto `X-API-Key`) | `apiUrl`, `apiKey` |
 
-**Endpoints:** cada uno tiene `ruta`, `modo` (`incremental` o `snapshot`), `paginado` (true/false), `params` (se envían siempre) y `paramsIncrementales` (solo en incremental). En los valores se reemplazan `{fecha}`, `{modifiedFrom}` y `{modifiedTo}`. La ventana es `[FECHA_DATOS 00:00:00, FECHA_DATOS + 1 00:00:00)` con el formato de `ventana.formatoFechaHora`.
+**Endpoints:** la clave es el nombre que se usa en `ENDPOINTS`. Cada uno tiene `carpeta` (carpeta en el bucket), `ruta`, `modo` (`incremental` o `snapshot`, define `tipo_carga=`), `paginado` (true/false) y `params`. Todo lo que está en `params` se envía siempre, así que es obligatorio:
+
+- Valor fijo: se envía tal cual, por ejemplo `{"nombre": "continent", "valor": "europe"}`.
+- Valor `{env:NOMBRE}`: toma la variable de entorno `NOMBRE` (del `.env` en local, de Airflow en Cloud Run). Si falta, el endpoint falla con un error que la nombra. El job no calcula fechas: `MODIFIED_FROM`/`MODIFIED_TO` las manda Airflow.
+
+Solo `FECHA_DATOS` define carpetas; las demás variables no crean niveles en el bucket. Las credenciales van en `API_CONFIG`, nunca en `{env:...}`.
+
+Para tener el mismo endpoint como incremental y snapshot, decláralo dos veces con la misma `carpeta` (por ejemplo `rates` y `rates_snapshot`): quedan en la misma carpeta con distinto `tipo_carga=`, y cada DAG elige cuál corre con `ENDPOINTS`.
 
 **Paginación** (sección `paginacion`, común a la API): nombre de los parámetros de página y tamaño, `tamanoPagina`, `paginaInicial`, campos `items`, `totalCount` y `totalPages`, y `maxPaginas` como tope de seguridad. Los parámetros de página se agregan solos a los endpoints con `paginado: true`.
 
@@ -138,13 +145,13 @@ Ejemplo para un endpoint tipo CargoProduce (los nombres de parámetros son a con
 "fuente": "cargoproduce",
 "endpoints": {
     "embarques": {
+        "carpeta": "embarques",
         "ruta": "/embarques",
         "modo": "incremental",
         "paginado": true,
-        "params": [],
-        "paramsIncrementales": [
-            {"nombre": "modifiedFrom", "valor": "{modifiedFrom}"},
-            {"nombre": "modifiedTo", "valor": "{modifiedTo}"}
+        "params": [
+            {"nombre": "modifiedFrom", "valor": "{env:MODIFIED_FROM}"},
+            {"nombre": "modifiedTo", "valor": "{env:MODIFIED_TO}"}
         ]
     }
 }
@@ -157,9 +164,10 @@ Ejemplo para un endpoint tipo CargoProduce (los nombres de parámetros son a con
 | Variable | En tu PC | En Cloud Run |
 |---|---|---|
 | `API_CONFIG` | archivo `.env` | secreto `api-config` de Secret Manager (`--set-secrets` en `cloudbuild.yaml`) |
-| `BUCKET`, `TABLA_LOG` | archivo `.env` | variables del job (`--set-env-vars` en `cloudbuild.yaml`) |
+| `BUCKET`, `TABLA_LOG` | archivo `.env` | variables del job (`--set-env-vars` en `cloudbuild.yaml`). Obligatorias |
 | `FECHA_DATOS` | archivo `.env` | la pasa Airflow en cada ejecución (D-1). Obligatoria y exactamente `YYYY-MM-DD` |
-| `TIPO_CARGA`, `ENDPOINTS`, `FORZAR` | archivo `.env` | opcionales; Airflow las pasa en un snapshot o un reproceso |
+| `ENDPOINTS`, `FORZAR` | archivo `.env` | opcionales; cada DAG pasa `ENDPOINTS` con lo que corre; `FORZAR` en un reproceso |
+| Cada `{env:NOMBRE}` de `params` (p. ej. `MODIFIED_FROM`) | archivo `.env` | la pasa Airflow; obligatoria si el endpoint la usa |
 | `AIRFLOW_DAG_ID`, `AIRFLOW_TASK_ID`, `AIRFLOW_RUN_ID`, `INTENTO` | archivo `.env` (o vacías) | las pasa Airflow (`{{ dag.dag_id }}`, `{{ ti.task_id }}`, `{{ run_id }}`, `{{ ti.try_number }}`) |
 | `CLOUD_RUN_EXECUTION` | no aplica (`local`) | la define Cloud Run sola |
 

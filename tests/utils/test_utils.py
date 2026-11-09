@@ -3,30 +3,32 @@
 # seccion Imports
 import json
 import logging
-from datetime import datetime, timezone
+import re
 
 import pytest
 
 from utils.utils import (
-    calcularVentana,
     configurarLogging,
-    generarEjecucion,
-    getApiConfig,
     getConfig,
-    getContexto,
+    getContextoEjecucion,
     getFechaDatos,
     validarFecha,
 )
 
 
 # seccion Funciones
+@pytest.fixture(autouse=True)
+def fechaDatos(monkeypatch):
+    """FECHA_DATOS válida para getContextoEjecucion."""
+    monkeypatch.setenv("FECHA_DATOS", "2026-11-02")
+
+
 def testGetConfigTieneSecciones():
     """parameters.json trae las secciones que usa el job."""
-    parametros = getConfig()
+    parametros = getConfig("parameters.json")
     for seccion in (
         "fuente",
         "auth",
-        "ventana",
         "paginacion",
         "endpoints",
         "paths",
@@ -59,33 +61,17 @@ def testFechaValida(monkeypatch):
     assert getFechaDatos() == "2026-10-21"
 
 
-def testVentanaCruzaMes():
-    """La ventana de un día termina a las 00:00 del día siguiente."""
-    assert calcularVentana("2026-10-31", "%Y-%m-%dT%H:%M:%S") == (
-        "2026-10-31T00:00:00",
-        "2026-11-01T00:00:00",
-    )
-
-
-def testGenerarEjecucion():
-    """La ejecución es un timestamp UTC compacto."""
-    momento = datetime(2026, 11, 3, 11, 20, 30, tzinfo=timezone.utc)
-    assert generarEjecucion(momento) == "20261103T112030Z"
-
-
 def testContextoPorDefecto(monkeypatch):
-    """Sin variables: incremental, todos los endpoints, intento 1."""
+    """Sin variables: todos los endpoints, sin forzar, intento 1."""
     for v in (
-        "TIPO_CARGA",
         "ENDPOINTS",
         "FORZAR",
         "INTENTO",
         "AIRFLOW_TASK_ID",
     ):
         monkeypatch.delenv(v, raising=False)
-    ctx = getContexto()
+    ctx = getContextoEjecucion()
     assert ctx["taskId"] == "manual"
-    assert ctx["tipoCarga"] == "incremental"
     assert ctx["endpoints"] == []
     assert ctx["forzar"] is False
     assert ctx["intento"] == 1
@@ -93,44 +79,23 @@ def testContextoPorDefecto(monkeypatch):
 
 def testContextoDesdeAirflow(monkeypatch):
     """Lee las variables que envía Airflow."""
-    monkeypatch.setenv("TIPO_CARGA", "Snapshot")
     monkeypatch.setenv("ENDPOINTS", "rates, currencies")
     monkeypatch.setenv("FORZAR", "true")
     monkeypatch.setenv("INTENTO", "3")
     monkeypatch.setenv("AIRFLOW_TASK_ID", "extraer_api_a_bucket")
-    ctx = getContexto()
+    ctx = getContextoEjecucion()
+    assert ctx["fechaDatos"] == "2026-11-02"
     assert ctx["taskId"] == "extraer_api_a_bucket"
-    assert ctx["tipoCarga"] == "snapshot"
     assert ctx["endpoints"] == ["rates", "currencies"]
     assert ctx["forzar"] is True
     assert ctx["intento"] == 3
 
 
-def testTipoCargaInvalido(monkeypatch):
-    """Un TIPO_CARGA desconocido falla."""
-    monkeypatch.setenv("TIPO_CARGA", "full")
-    with pytest.raises(ValueError):
-        getContexto()
-
-
-def testApiConfigIncompleta(monkeypatch):
-    """API_CONFIG sin apiUrl falla."""
-    monkeypatch.setenv("API_CONFIG", json.dumps({"username": "u"}))
-    with pytest.raises(ValueError):
-        getApiConfig("basic")
-
-
-def testApiConfigBearerSinToken(monkeypatch):
-    """Con auth bearer, API_CONFIG debe traer token."""
-    monkeypatch.setenv("API_CONFIG", json.dumps({"apiUrl": "x"}))
-    with pytest.raises(ValueError):
-        getApiConfig("bearer")
-
-
-def testAuthTipoInvalido():
-    """Un tipo de auth desconocido falla."""
-    with pytest.raises(ValueError):
-        getApiConfig("oauth")
+@pytest.mark.parametrize("valor", ["1", "si", "yes", "false", ""])
+def testForzarSoloConTrue(monkeypatch, valor):
+    """FORZAR solo se activa con true; cualquier otro valor es false."""
+    monkeypatch.setenv("FORZAR", valor)
+    assert getContextoEjecucion()["forzar"] is False
 
 
 def testLogJsonEnCloudRun(monkeypatch, capsys):
@@ -160,4 +125,7 @@ def testLogTextoEnLocal(monkeypatch, capsys):
     monkeypatch.delenv("CLOUD_RUN_JOB", raising=False)
     configurarLogging()
     logging.getLogger("prueba").info("hola")
-    assert capsys.readouterr().err.strip() == "INFO prueba hola"
+    salida = capsys.readouterr().err.strip()
+    assert re.fullmatch(
+        r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \[INFO   \] prueba: hola", salida
+    )

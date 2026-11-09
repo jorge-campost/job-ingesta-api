@@ -1,4 +1,4 @@
-"""Pruebas de main.py: el condicional de TABLA_LOG."""
+"""Pruebas de main.py: variables obligatorias y armado de las clases."""
 
 # seccion Imports
 import json
@@ -13,9 +13,9 @@ import main
 # seccion Funciones
 @pytest.fixture
 def entorno(monkeypatch):
-    """Variables mínimas para main() y un CEA simulado.
+    """Variables mínimas para main() y las clases simuladas.
 
-    :return: el CEA y el CLI simulados
+    :return: ClassExtractApi y ClassLogIngesta simuladas
     :rtype: tuple
     """
     monkeypatch.setattr(main, "load_dotenv", lambda: None)
@@ -23,40 +23,32 @@ def entorno(monkeypatch):
     monkeypatch.setattr(main, "configurarLogging", lambda: None)
     monkeypatch.setenv("FECHA_DATOS", "2026-11-02")
     monkeypatch.setenv("BUCKET", "bucket-prueba")
-    monkeypatch.setenv("API_CONFIG", json.dumps({"apiUrl": "https://x"}))
-    cea = MagicMock()
-    cli = MagicMock()
-    monkeypatch.setattr(main, "CEA", cea)
-    monkeypatch.setattr(main, "CLI", cli)
-    return cea, cli
-
-
-def testSinTablaLogNoRegistra(entorno, monkeypatch):
-    """TABLA_LOG vacía: no se crea ClassLogIngesta."""
-    cea, cli = entorno
-    monkeypatch.setenv("TABLA_LOG", "")
-    main.main()
-    cli.assert_not_called()
-    assert cea.call_args.kwargs["logIngesta"] is None
-    cea.return_value.ejecutar.assert_called_once_with("2026-11-02")
-
-
-def testTablaLogNoDefinida(entorno, monkeypatch):
-    """Sin la variable TABLA_LOG tampoco se registra."""
-    cea, cli = entorno
-    monkeypatch.delenv("TABLA_LOG", raising=False)
-    main.main()
-    cli.assert_not_called()
-    assert cea.call_args.kwargs["logIngesta"] is None
-
-
-def testConTablaLogRegistra(entorno, monkeypatch):
-    """Con TABLA_LOG se crea ClassLogIngesta con esa tabla."""
-    cea, cli = entorno
     monkeypatch.setenv("TABLA_LOG", "p.ext_comex.ctl_log_ingesta")
+    monkeypatch.setenv("API_CONFIG", json.dumps({"apiUrl": "https://x"}))
+    extractApi = MagicMock()
+    logIngesta = MagicMock()
+    monkeypatch.setattr(main, "ClassExtractApi", extractApi)
+    monkeypatch.setattr(main, "ClassLogIngesta", logIngesta)
+    return extractApi, logIngesta
+
+
+def testConTablaLogRegistra(entorno):
+    """Instancia ClassLogIngesta con TABLA_LOG y ejecuta con la fecha."""
+    extractApi, logIngesta = entorno
     main.main()
-    cli.assert_called_once_with("p.ext_comex.ctl_log_ingesta")
-    assert cea.call_args.kwargs["logIngesta"] is cli.return_value
+    logIngesta.assert_called_once_with("p.ext_comex.ctl_log_ingesta")
+    assert extractApi.call_args.kwargs["logIngesta"] is logIngesta.return_value
+    extractApi.return_value.ejecutar.assert_called_once_with("2026-11-02")
+
+
+@pytest.mark.parametrize("variable", ["BUCKET", "TABLA_LOG", "API_CONFIG"])
+def testVariableObligatoria(entorno, monkeypatch, variable):
+    """Sin BUCKET, TABLA_LOG o API_CONFIG falla antes de extraer."""
+    extractApi, _ = entorno
+    monkeypatch.setenv(variable, "")
+    with pytest.raises(ValueError, match=variable):
+        main.main()
+    extractApi.assert_not_called()
 
 
 def testLogApiUrlSinCredenciales(entorno, monkeypatch, caplog):
