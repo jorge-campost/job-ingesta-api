@@ -1,0 +1,9 @@
+# Dependencias para desarrollo local (no van en la imagen)
+-r requirements.txt
+black==26.10.1
+flake8==7.5.0
+pydocstyle==6.3.0
+pytest==9.2.0
+pre-commit==4.7.0
+sphinx==9.2.0
+sphinx-markdown-builder==0.6.11

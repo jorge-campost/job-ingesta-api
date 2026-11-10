@@ -1,0 +1,50 @@
+{
+    "fuente": "frankfurter",
+    "auth": {
+        "tipo": "none",
+        "headerApiKey": "X-API-Key"
+    },
+    "paginacion": {
+        "paramPagina": "page",
+        "paramTamano": "pageSize",
+        "tamanoPagina": 1000,
+        "paginaInicial": 1,
+        "campoItems": "items",
+        "campoTotalCount": "totalCount",
+        "campoTotalPages": "totalPages",
+        "maxPaginas": 10000
+    },
+    "endpoints": {
+        "rates": {
+            "carpeta": "rates",
+            "ruta": "/rates",
+            "modo": "incremental",
+            "paginado": false,
+            "params": [
+                {"nombre": "date", "valor": "{env:FECHA_DATOS}"}
+            ]
+        },
+        "currencies": {
+            "carpeta": "currencies",
+            "ruta": "/currencies",
+            "modo": "snapshot",
+            "paginado": false,
+            "params": []
+        }
+    },
+    "paths": {
+        "plantillaPrefijo": "{fuente}/{carpeta}/fecha_datos={fecha}/tipo_carga={tipo}/ejecucion={ejecucion}/",
+        "plantillaArchivo": "{fuente}_{carpeta}_{tipoCorto}_{fechaCompacta}_p{pagina:05d}{extension}",
+        "nombreManifest": "_manifest.json"
+    },
+    "filesExt": {
+        "extension": ".json",
+        "contentType": "application/json"
+    },
+    "others": {
+        "timeoutSegundos": 60,
+        "reintentos": 3,
+        "backoffFactor": 2,
+        "codigosReintento": [429, 500, 502, 503, 504]
+    }
+}

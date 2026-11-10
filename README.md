@@ -42,6 +42,8 @@ src/
 ├── utils/utils.py         # getConfig, getContextoEjecucion, getVariableEntorno, logging
 └── config/parameters.json # todo lo propio de la API
 tests/                     # pruebas generales, no dependen de la API
+docs/                      # guía para otra API y parameters.example.json
+requirements-dev.txt       # requirements.txt + herramientas de desarrollo
 ```
 
 ### Flujo por endpoint
@@ -62,7 +64,7 @@ Un endpoint fallido no detiene a los demás; al final el job sale con error si a
 
 ### Configuración (`parameters.json`)
 
-Para otra API se copia el repo y se cambia solo este archivo, el secreto y las variables del build y del DAG.
+Para otra API se copia el repo y se cambia solo este archivo, el secreto y las variables del build y del DAG: ver [docs/reutilizar-con-otra-api.md](docs/reutilizar-con-otra-api.md). [`docs/parameters.example.json`](docs/parameters.example.json) es un ejemplo funcional (Frankfurter).
 
 - `auth.tipo` y claves que debe traer `API_CONFIG`: `none` (`apiUrl`), `basic` (`+username`, `password`), `bearer` (`+token`), `apiKey` (`+apiKey`, header en `auth.headerApiKey`).
 - `endpoints`: la clave es el nombre usado en `ENDPOINTS`. Campos `carpeta`, `ruta`, `modo` (`incremental`/`snapshot`), `paginado` y `params`. Cada valor de `params` es fijo o `{env:NOMBRE}`; todos son obligatorios. Mismo endpoint en ambos modos: dos entradas con la misma `carpeta`.
@@ -86,8 +88,7 @@ En local se leen del `.env` (ver `.env.example`).
 ## Trabajar en local
 
 ```powershell
-pip install -r requirements.txt
-pip install black flake8 pydocstyle pytest pre-commit
+pip install -r requirements-dev.txt   # incluye requirements.txt
 copy .env.example .env
 gcloud auth application-default login
 python src\main.py
