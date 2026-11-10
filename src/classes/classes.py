@@ -100,6 +100,7 @@ class ClassLogIngesta:
             "cod_ejecucion_airflow": manifest["airflow"]["run_id"],
             "num_intento": manifest["airflow"]["intento"],
             "cod_ejecucion_cloud_run": manifest["cloud_run_execution"],
+            "ind_forzado": manifest["forzado"],
             "cnt_registros_api": manifest["total_count"],
             "cnt_paginas_api": manifest["total_pages"],
             "cnt_registros_descargados": manifest["registros_descargados"],
@@ -434,6 +435,7 @@ class ClassExtractApi:
                 "intento": ctx["intento"],
             },
             "cloud_run_execution": ctx["cloudRunExecution"],
+            "forzado": ctx["forzar"],
             "request": {
                 "ruta": endpoint["ruta"],
                 "params": params,

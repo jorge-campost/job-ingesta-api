@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS `jclab-dev-brz-tmp.ext__frankfurter.control_ingesta` 
   cod_ejecucion_airflow STRING,           -- run del DAG: agrupa endpoints e intentos
   num_intento INT64,                      -- try_number de la tarea de Airflow
   cod_ejecucion_cloud_run STRING,         -- una ejecución del job
+  ind_forzado BOOL,                       -- true si se ejecutó con FORZAR=true
   cnt_registros_api INT64,                -- totalCount informado por la API
   cnt_paginas_api INT64,                  -- totalPages informado por la API
   cnt_registros_descargados INT64,

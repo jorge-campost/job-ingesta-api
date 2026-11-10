@@ -29,6 +29,7 @@ def manifestDePrueba() -> dict:
             "intento": 1,
         },
         "cloud_run_execution": "local",
+        "forzado": False,
         "total_count": 3,
         "total_pages": 1,
         "registros_descargados": 3,
@@ -56,6 +57,7 @@ def testRegistraUnaFila():
     assert fila["cnt_registros_descargados"] == 3
     assert fila["cod_tarea"] == "tarea_prueba"
     assert fila["cod_ejecucion_airflow"] == "manual__1"
+    assert fila["ind_forzado"] is False
 
 
 def testErroresDeFilaSoloAvisan(caplog):
